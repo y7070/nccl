@@ -212,6 +212,15 @@ struct bootstrapState {
   volatile uint32_t *abortFlag;
 };
 
+/*
+    kyyang:
+      1. send my info to root. Current info only contains rank and some addr.
+      2. recv next sock address in the AllGather ring from root.
+         Recv message from "bootstrapGetUniqueID() -> bootstrapCreateRoot()".
+      3. connect with peer received in 2
+      4. invoke bootstrapAllGather() to all gather socks' handle
+      5. init service proxy
+*/
 ncclResult_t bootstrapInit(ncclUniqueId * id, struct ncclComm* comm) {
   int rank = comm->rank;
   int nranks = comm->nRanks;

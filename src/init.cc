@@ -74,6 +74,15 @@ pthread_mutex_t initLock = PTHREAD_MUTEX_INITIALIZER;
 static bool initialized = false;
 static size_t maxLocalSizeBytes = 0;
 
+/*
+    kyyang:
+    1. initEnv: setup NCCL config in USER HOME dir
+    2. initGdrCopy: load dynamic lib "GDR COPY" if necessary
+    3. ncclKernMaxLocalSize: kernel API related setting
+    4. ncclKernSetSharedMemoryCarveout: setup L1 Shared Mem to be carved-out if necessay
+    5. bootstrapNetInit: setup which IF to be used for bootstrap
+    6. ncclNetPluginInit: init dynamic lib net plugin(e.g. collective net) if necessary
+*/
 static ncclResult_t ncclInit() {
   if (__atomic_load_n(&initialized, __ATOMIC_ACQUIRE)) return ncclSuccess;
   pthread_mutex_lock(&initLock);
@@ -100,6 +109,15 @@ ncclResult_t ncclGetVersion(int* version) {
   return ncclSuccess;
 }
 
+/*
+    kyyang: step 1, ncclGetUniqueID
+    1. ncclInit(): try to init env
+    2. bootstrapGetUniqueID() -> bootstrapCreateRoot():
+      collect sock info from all ranks;
+      send the next sock address to every rank in the AllGather ring.
+
+    ID will be sock address of root
+*/
 NCCL_API(ncclResult_t, ncclGetUniqueId, ncclUniqueId* out);
 ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
   NCCLCHECK(ncclInit());
@@ -290,6 +308,12 @@ exit:
   return ret;
 }
 
+/*
+    kyyang:
+      1. ncclNetInit(): select net one by one and wrt NCCL_NET
+      2. ncclMemoryPoolConstruct()
+      3. init channels to zero
+*/
 static ncclResult_t commAlloc(ncclComm_t* comret, int ndev, int rank) {
   if (ndev < 1) {
     WARN("invalid device count (%d) requested", ndev);
@@ -504,6 +528,23 @@ NCCL_PARAM(CollNetNodeThreshold, "COLLNET_NODE_THRESHOLD", 2);
 NCCL_PARAM(NvbPreconnect, "NVB_PRECONNECT", 1);
 NCCL_PARAM(AllocP2pNetLLBuffers, "NCCL_ALLOC_P2P_NET_LL_BUFFERS", 0);
 
+/*
+    kyyang:
+    1. bootstrapInit(): bring up All Gather Ring between peers.
+       Interact with root's call from "bootstrapGetUniqueID() -> bootstrapCreateRoot()".
+    2. fillInfo(): fill my info. Info contains:
+       * rank
+       * hostHash = getHostHash() + commHash 
+         $(hostname)$(cat /proc/sys/kernel/random/boot_id); could be overriden by NCCL_HOSTID
+       * pidHash = getPidHash() + commHash
+       * shmDev = stat("/dev/shm").st_dev
+       * busId = busId
+       * comm = comm
+       * cudaCompCap
+    3. bootstrapAllGather() for { peerInfo, comm, compCap }
+    4. All Gather { nChannels, graphInfo, topoRanks }
+    5. invoke ncclTransportP2pConnect() and ncclTransportP2pSetup() to setup p2p connections
+*/
 static ncclResult_t initTransportsRank(struct ncclComm* comm, ncclUniqueId* commId) {
   // We use 2 AllGathers
   // 1. { peerInfo, comm, compCap}
@@ -1068,6 +1109,12 @@ struct ncclCommFinalizeAsyncJob {
   ncclComm_t comm;
 };
 
+/*
+    kyyang:
+    1. commAlloc(): alloc resource and select main network
+    2. initTransportsRank(): fill info for every rank, and construct trees and rings
+    3. devCommSetup()
+*/
 static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   struct ncclCommInitRankAsyncJob* job = (struct ncclCommInitRankAsyncJob*)job_;
   ncclComm_t* newcomm = job->newcomm;
@@ -1166,6 +1213,16 @@ fail:
   goto exit;
 }
 
+/*
+    kyyang: step 2, ncclCommInitRank
+
+    1. cudaLibraryInit: load CUDA hooks
+    2. cudaGetDevice: get current device
+    3. ncclCommInitRankDev -> ncclAsyncLaunch(ncclCommInitRankFunc):
+       init all the things
+       setup p2p communication network
+
+*/
 NCCL_API(ncclResult_t, ncclCommInitRank, ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank);
 ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank) {
   NVTX3_FUNC_RANGE_IN(nccl_domain);

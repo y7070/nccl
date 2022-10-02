@@ -88,6 +88,21 @@ NCCL_PARAM(P2pUseCudaMemcpy, "P2P_USE_CUDA_MEMCPY", 0);
 static int useMemcpy = 0;
 static void initCeOperation();
 
+/*
+    kyyang:
+    Key points:
+    * hostHash must be equal
+      - could be overriden by NCCL_HOSTID
+    * shmDev must be equal, this can never be achieved
+      - must modify NCCL source code
+    * ncclTopoCheckP2p shoud pass
+      - 
+    * both devices must be visible in containers
+      - could be achieved by modified nvidia-gpu-device-plugin
+    * cudaDeviceCanAccessPeer and cudaIpcOpenMemHandle must be invoked successfully
+      - could also be resolved by modified nvidia-gpu-device-plugin
+*/
+
 /* Determine if two peers can communicate through p2p */
 ncclResult_t p2pCanConnect(int* ret, struct ncclTopoSystem* topo, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1, struct ncclPeerInfo* info2) {
   initCeOperation();
